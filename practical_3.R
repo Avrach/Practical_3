@@ -63,4 +63,22 @@ evaluate_xtilde_x_s <- function(data, K){
   #计算感染模型矩阵X_tilde
   X_tilde <- splineDesign(knots = all_knots, x = t_f, ord = ORD)
   
+  #3.计算死亡模型矩阵X
+  #计算观测到死亡的时间与感染时间的差值
+  lags <- sapply(t_f, function(inf_day) day_year - inf_day)
+  
+  #存放概率的矩阵
+  P_conv <- matrix(0,n,m)
+  limits_matrix <- matrix(30:n,n,m)
+  
+  #填充P_conv矩阵
+  P_conv[(lags >= 1) & (lags <= max_duration) & (lags <= limits_matrix)] <- pd[lags[(lags >= 1) & (lags <= max_duration) & (lags <= limits_matrix)]]
+  
+  #计算X
+  X <- P_conv %*% X_tilde
+  
+  return(list(X=X, X_tilde=X_tilde, S=S))
 }
+
+K_val=80
+test <- evaluate_xtilde_x_s(engcov_data, K_val)
