@@ -167,3 +167,101 @@ print(head(grad_numeric_manual, 5))
 diffs <- grad_analytic - grad_numeric_manual
 print("差异摘要 (应接近于零):")
 print(summary(diffs))
+
+
+
+
+
+# Task 3 ---------------------------------------------------------------
+
+
+
+# ===== Task 3: simplest version =====
+lambda_fixed <- 5e-5         
+mats <- evaluate_xtilde_x_s(engcov_data, K_val)  
+X <- mats$X
+X_tilde <- mats$X_tilde
+S <- mats$S
+
+y <- engcov_data$nhs
+day <- engcov_data$julian
+t_f <- (min(day) - 30):max(day)   
+
+
+obj  <- function(g) calculate_pnll(gamma = g, y = y, X = X, S = S, lambda = lambda_fixed)
+grad <- function(g) calculate_pnll_grad(gamma = g, y = y, X = X, S = S, lambda = lambda_fixed)
+
+
+gamma0 <- rep(0, K_val)
+
+fit <- optim(par = gamma0, fn = obj, gr = grad, method = "BFGS", control = list(maxit = 500))
+
+beta_hat <- exp(fit$par)
+mu_hat <- as.numeric(X %*% beta_hat)         
+f_hat  <- as.numeric(X_tilde %*% beta_hat)   
+
+
+par(mfrow = c(2,1), mar = c(4,4,2,1))
+plot(day, y, pch=16, cex=.6, xlab="Day (2020, julian)", ylab="Deaths (NHS)",
+     main=paste0("Deaths vs fitted (lambda=", lambda_fixed, ")"))
+lines(day, mu_hat, lwd=2)
+
+plot(t_f, f_hat, type="l", lwd=2, xlab="Day (2020, julian)", ylab="Estimated infections f(t)",
+     main="Estimated daily infections")
+
+
+
+
+# Task 4
+
+fit_one_lambda <- function(lambda) {
+  obj  <- function(g) calculate_pnll(gamma = g, y = y, X = X, S = S, lambda = lambda)
+  grad <- function(g) calculate_pnll_grad(gamma = g, y = y, X = X, S = S, lambda = lambda)
+
+  gamma0 <- rep(0, K_val)
+
+  fit <- optim(par = gamma0, fn = obj, gr = grad, method = "BFGS")
+
+  beta_hat <- exp(fit$par)
+  mu_hat   <- as.numeric(X %*% beta_hat)
+
+
+  ll <- sum(y * log(mu_hat) - mu_hat)
+
+  list(lambda = lambda,
+       beta = beta_hat,
+       mu = mu_hat,
+       loglik = ll)
+}
+compute_edf <- function(mu, lambda) {
+  w <- y / (mu^2)                 # length n
+  H0   <- t(X) %*% (X * w)        # X^T W X
+  Hlam <- H0 + lambda * S
+  edf  <- sum(diag(solve(Hlam, H0)))
+  edf
+}
+lambda_grid <- 10^seq(-13, -7, length.out = 50)
+
+bic_vals  <- numeric(length(lambda_grid))
+fits_list <- vector("list", length(lambda_grid))
+
+n <- length(y)
+
+for (i in seq_along(lambda_grid)) {
+
+  lam <- lambda_grid[i]
+
+  fit_i <- fit_one_lambda(lam)
+  fits_list[[i]] <- fit_i
+
+  edf_i <- compute_edf(fit_i$mu, lam)
+
+  bic_vals[i] <- -2 * fit_i$loglik + log(n) * edf_i
+}
+best_i <- which.min(bic_vals)
+best_lambda <- lambda_grid[best_i]
+best_fit <- fits_list[[best_i]]
+
+cat("Best lambda =", best_lambda, "\n")
+plot(day, y)
+lines(day, best_fit$mu, col="red")
