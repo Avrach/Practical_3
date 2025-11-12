@@ -168,12 +168,7 @@ diffs <- grad_analytic - grad_numeric_manual
 print("差异摘要 (应接近于零):")
 print(summary(diffs))
 
-
-
-
-
-# Task 3 ---------------------------------------------------------------
-
+# Task 3
 
 lambda_fixed <- 5e-5         
 # Task 1 function to get X, X_tilde, and S
@@ -208,14 +203,10 @@ par(mfrow = c(2,1), mar = c(4,4,2,1))
 plot(day, y, pch=16, cex=.6, xlab="Day (2020, julian)", ylab="Deaths (NHS)",
 main=paste0("Deaths vs fitted (lambda=", lambda_fixed, ")"))
 lines(day, mu_hat, lwd=2)
-
 plot(t_f, f_hat, type="l", lwd=2, xlab="Day (2020, julian)", ylab="Estimated infections f(t)", main="Estimated daily infections")
 
-
-
-
-# Task 4 ---------------------------------------------------------------
-
+# Task 4 
+                 
 # A function: Fit the penalized Poisson model for a given lambda
 fit_one_lambda <- function(lambda) {
   # Penalized negative log-likelihood PNLL(gamma)
@@ -493,3 +484,4 @@ legend("topleft",
 
 # restore par settings
 par(op) 
+
