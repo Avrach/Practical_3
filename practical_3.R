@@ -295,3 +295,201 @@ cat("Best lambda =", best_lambda, "\n")
 plot(day, y)
 lines(day, best_fit$mu, col="red")
 
+# Task 5
+
+# Extract matrices and data, and prepare the time axis
+
+# From the Task1 function we obtain three core matrices:
+# X: n×K model matrix (death mean μ = X β)
+# X_tilde: m×K spline basis matrix (infection curve f(t) = X_tilde β)
+# S:       K×K second-difference penalty matrix (smoothness penalty)
+mats <- evaluate_xtilde_x_s(engcov_data, K_val)
+X <- mats$X
+X_tilde <- mats$X_tilde
+S <- mats$S
+
+# y: daily NHS deaths (length n)
+y <- engcov_data$nhs
+
+# day: corresponding Julian day indices (t_i)
+day <- engcov_data$julian
+
+# t_f: time axis on which we estimate f(t)
+t_f <- (min(day) - 30):max(day)
+
+# Fix the smoothing parameter at the value selected in Task4
+lambda_star <- best_lambda
+
+# Point estimate and warm-start in the γ space
+if ("par" %in% names(best_fit)) {
+  # Case A: `best_fit` is the raw return from optim()  
+  fit0_beta  <- exp(best_fit$par)
+  gamma_last <- best_fit$par 
+} else if ("beta" %in% names(best_fit)) {
+  # Case B: `best_fit` is custom list from Task 4
+  fit0_beta  <- best_fit$beta 
+  gamma_last <- log(pmax(fit0_beta, 1e-12))
+} else {
+  stop("best_fit has neither $par nor $beta; check Task 4 output.")
+}
+
+#Define the weighted objective and gradient
+
+# Weighted penalized negative log-likelihood:
+pnll_wb <- function(gamma, wb) {
+  beta <- exp(gamma)
+  mu <- as.numeric(X %*% beta)
+  
+  # numerical guard to avoid log(μ) underflow
+  mu <- pmax(mu, 1e-12)
+  
+  # Weighted negative log-likelihood
+  nll <- sum(wb * (mu - y * log(mu)))
+  
+  # Smoothness penalty
+  pen <- as.numeric(lambda_star * crossprod(beta, S %*% beta) / 2)
+  
+  # Objective value minimized by BFGS
+  nll + pen
+}
+
+# Gradient of the weighted objective
+grad_wb <- function(gamma, wb) {
+  beta <- exp(gamma)
+  mu <- as.numeric(X %*% beta) 
+  
+  # numerical guard to avoid log(μ) underflow
+  mu <- pmax(mu, 1e-12)
+  
+  z <- wb * (1 - y / mu)
+  g1 <- as.numeric(beta * (t(X) %*% z))
+  g2 <- lambda_star * beta * (S %*% beta)
+  
+  # length-K gradient vector
+  as.numeric(g1 + g2) 
+}
+
+# Bootstrap main loop: generate B curves f̂(t)
+
+# number of bootstrap replicates
+B <- 200
+
+# number of observations (days)
+n <- length(y)
+
+# number of time points for f(t)
+m <- nrow(X_tilde)
+
+# Preallocate containers:
+# f_boot: m×B, each column is one bootstrap f̂ curve
+f_boot <- matrix(NA_real_, m, B)
+
+# mu_boot: n×B, each column is the corresponding μ̂ (for plotting death bands)
+mu_boot <- matrix(NA_real_, n, B)
+
+# store BFGS convergence codes(0 = success)
+conv_flag <- integer(B)
+
+for (b in 1:B) {
+  # sample with replacement n indices from {1,…,n}; tabulate counts per index
+  wb <- tabulate(sample(n, replace = TRUE), n)
+  
+  # wrap objective/gradient for this replicate
+  obj_b <- function(g) pnll_wb(g, wb)
+  grad_b <- function(g) grad_wb(g, wb)
+  
+  # BFGS with warm start for speed
+  fit_b <- try(
+    optim(par = gamma_last, fn = obj_b, gr = grad_b,
+          method = "BFGS", control = list(maxit = 1000)),
+    silent = TRUE
+  )
+  if (inherits(fit_b, "try-error") || fit_b$convergence != 0) {
+    # If warm start fails (rare with extreme wb), retry from zeros and allow more iters
+    fit_b <- optim(par = rep(0, K_val), fn = obj_b, gr = grad_b,
+                   method = "BFGS", control = list(maxit = 2000))
+  }
+  # Record convergence; if success, store this replicate and update warm start
+  conv_flag[b] <- if (inherits(fit_b, "try-error")) 99L else fit_b$convergence
+  if (conv_flag[b] == 0) {
+    gamma_last <- fit_b$par
+    beta_b <- exp(fit_b$par)
+    
+    # fitted deaths mean for this replicate
+    mu_boot[,   b ] <- drop(X %*% beta_b)
+    
+    # fitted infection curve for this replicate
+    f_boot[,   b ] <- drop(X_tilde %*% beta_b)
+  }
+}
+# Quick diagnostic table: ideally mostly 0 (success)
+print(table(convergence = conv_flag))
+
+# Summaries: point estimate and 95% pointwise bands 
+
+# Point estimates (at best λ) for f(t) and μ
+mu_point <- drop(X %*% fit0_beta)
+f_point <- drop(X_tilde %*% fit0_beta) 
+
+# For each time point, take the 2.5% and 97.5% quantiles across B replicates
+# to form a 95% pointwise band
+mu_lo <- apply(mu_boot, 1, quantile, probs = 0.025, na.rm = TRUE)
+mu_hi <- apply(mu_boot, 1, quantile, probs = 0.975, na.rm = TRUE)
+f_lo <- apply(f_boot,  1, quantile, probs = 0.025, na.rm = TRUE)
+f_hi <- apply(f_boot,  1, quantile, probs = 0.975, na.rm = TRUE)
+
+# Task 6 (base R)
+
+# Axis ranges: pad by ~5% at the top to avoid clipping the band or lines
+xlim_death <- range(day)
+ylim_death <- c(0, max(c(y, mu_hi), na.rm = TRUE) * 1.05)
+
+xlim_inf <- range(t_f)
+ylim_inf <- c(0, max(f_hi, na.rm = TRUE) * 1.05)
+
+# two panels, readable axes
+op <- par(mfrow = c(2,1), mar = c(4.5,4.8,2.2,1.2), las = 1)
+
+# Top panel: observed deaths (points) + fitted mean (line) + 95% shaded band
+plot(day, y, pch = 16, cex = 0.6,
+     xlab = "Day of 2020 (Julian)", ylab = "Deaths (NHS)",
+     xlim = xlim_death, ylim = ylim_death,
+     main = sprintf("Daily deaths with model fit (B=%d)", B))
+
+# Draw band first so it stays behind the line and points
+xx <- c(day, rev(day))
+yy <- c(pmax(mu_lo, 0), rev(pmax(mu_hi, 0)))
+polygon(xx, yy, col = rgb(0.2,0.5,0.9,0.20), border = NA)
+
+# Fitted mean (solid line) and observed points on top
+lines(day, mu_point, lwd = 2, col = "#1f77b4")
+points(day, y, pch = 16, cex = 0.6)
+
+legend("topleft",
+       legend = c("Observed deaths", "Fitted mean", "95% band"),
+       pch = c(16, NA, 15), pt.cex = c(0.7, NA, 1.2),
+       lty = c(NA, 1, NA), lwd = c(NA, 2, NA),
+       col = c("black", "#1f77b4", rgb(0.2,0.5,0.9,0.20)),
+       bty = "n")
+
+# Bottom panel: f(t) estimate (line) + 95% shaded band
+plot(t_f, f_point, type = "n",
+     xlab = "Day of 2020 (Julian)", ylab = "Estimated infections f(t)",
+     xlim = xlim_inf, ylim = ylim_inf,
+     main = "Estimated daily infections with 95% bootstrap band")
+
+xx <- c(t_f, rev(t_f))
+yy <- c(pmax(f_lo, 0), rev(pmax(f_hi, 0)))
+polygon(xx, yy, col = rgb(0.8,0.2,0.2,0.20), border = NA)
+
+lines(t_f, f_point, lwd = 2, col = "#d62728")
+
+legend("topleft",
+       legend = c("f(t) estimate", "95% band"),
+       lty = c(1, NA), lwd = c(2, NA),
+       pch = c(NA, 15),
+       col = c("#d62728", rgb(0.8,0.2,0.2,0.20)),
+       bty = "n")
+
+# restore par settings
+par(op) 
