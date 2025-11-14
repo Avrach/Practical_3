@@ -90,6 +90,9 @@ evaluate_xtilde_x_s <- function(data, K){
 calculate_pnll <- function(gamma, y, X, S, lambda){
   beta <- exp(gamma)
   mu <- X %*% beta
+
+  # numerical guard to avoid log(μ) underflow
+  mu <- pmax(mu, 1e-12)
   
   # Calculate the negative log-likelihood
   nll <- sum(mu - y * log(mu))
@@ -106,6 +109,9 @@ calculate_pnll <- function(gamma, y, X, S, lambda){
 calculate_pnll_grad <- function(gamma, y, X, S, lambda) {
   beta <- exp(gamma)
   mu <- X %*% beta
+
+  # numerical guard to avoid log(μ) underflow
+  mu <- pmax(mu, 1e-12)
   
   # Calculate the gradient of the NLL
   w <- 1 - y / mu
@@ -491,4 +497,5 @@ legend("topleft",
 
 # restore par settings
 par(op) 
+
 
